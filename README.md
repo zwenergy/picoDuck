@@ -31,6 +31,9 @@ Steps:
 ### PCB
 The PCB can be ordered using the Gerber files. A width of **1.2 mm** should be chosen with ENIG surface.
 
+## Shell
+A 3D printable shell for the cart can be found in the folder "shell".
+
 ## Disclaimer
 **Use the files and/or schematics to build your own board at your own risk**.
 This board works fine for me, but it's a simple hobby project, so there is no liability for errors in the schematics and/or board files.
