@@ -1,0 +1,150 @@
+<html>
+<head>
+<title>UF2 ROM Patcher for picoDuck</title>
+<h1>UF2 ROM Patcher for picoDuck</h1>
+</head>
+<body>
+  
+  <label for="file">UF2 File: </label>
+  <input type="file" id="file" />
+  <label for="romfile">ROM File: </label>
+  <input type="file" id="romfile" />
+  <button id="read-file">Patch</button>
+  
+  <p><i>Yes, web design is my passion. Please refrain from contacting me to do work as a front-end web designer, my schedule is filled up 🫠.</i></p>
+
+  <script>
+  function lendian32( arr, base ) {    
+    return ( arr[ base ] + ( arr[ base + 1 ] * 256 ) + ( arr[ base + 2 ] * 65536 ) + ( arr[ base + 2 ] * 16777216 ) );
+  }
+  
+  function saveByteArray( filename, data) {
+    var blob = new Blob([data], {type: "application/octet-stream"});
+    var link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    var fileName = filename;
+    link.download = filename;
+    link.click();
+  };
+    
+  document.querySelector("#read-file").addEventListener('click', function() {
+    // no file selected to read
+    if(document.querySelector("#file").value == '') {
+      console.log('No UF2 file selected');
+      return;
+    }
+    
+    if(document.querySelector("#romfile").value == '') {
+      console.log('No ROM file selected');
+      return;
+    }
+
+    // UF2 file.
+    var uf2file = document.querySelector("#file").files[0];
+    var uf2reader = new FileReader();
+    
+    // ROM file.
+    var romfile = document.querySelector("#romfile").files[0];
+    var romreader = new FileReader();
+    
+    var romarray = 0;
+    
+    
+    romreader.onload = function(e) {
+      console.log( "ROM read. Now waiting for UF2" );
+      var rombytearray = e.target.result;
+      romarray = new Uint8Array( rombytearray )
+      
+      uf2reader.readAsArrayBuffer(uf2file);
+    }
+    
+    
+    uf2reader.onload = function(e) {
+      console.log( "UF2 read." );
+      var bytearray = e.target.result;
+      var uf2array = new Uint8Array( bytearray )
+      
+      // Search for the ROMSTART
+      const uf2chunk = 512;
+      const dataoffset = 32;
+      const addroffset = 12;
+      const datasizeoffset = 16;
+      
+      var foundStart = 0;
+      var ROMaddr = 0;
+      
+      for ( let i = 0; i < uf2array.length; i += uf2chunk ) {
+        // Get data size
+        var datSize = lendian32( uf2array, i + datasizeoffset );
+        
+        // Go over the data.
+        for ( let datInd = dataoffset; datInd < dataoffset + datSize; datInd++ ) {
+          if ( String.fromCharCode( uf2array[ i + datInd ] ) == 'R' &&
+            String.fromCharCode( uf2array[ i + datInd + 1 ] ) == 'O' &&
+            String.fromCharCode( uf2array[ i + datInd + 2 ] ) == 'M' &&
+            String.fromCharCode( uf2array[ i + datInd + 3 ] ) == 'S' &&
+            String.fromCharCode( uf2array[ i + datInd + 4 ] ) == 'T' &&
+            String.fromCharCode( uf2array[ i + datInd + 5 ] ) == 'A' &&
+            String.fromCharCode( uf2array[ i + datInd + 6 ] ) == 'R' &&
+            String.fromCharCode( uf2array[ i + datInd + 7 ] ) == 'T' ) {
+              
+            // Get ROM base addr.
+            var chunkBase = lendian32( uf2array, i + addroffset );
+            ROMaddr = chunkBase + datInd - dataoffset;
+        
+            console.log( "FOUND ROMSTART" );
+            console.log( ROMaddr );
+            foundStart = 1;
+            break;
+          }
+        }
+
+        
+      }
+      
+      if ( !foundStart ) {
+        console.log( "did not find" );
+        return;
+      }
+      
+      // Start patching. Go over each chunk.
+      romLen = romarray.length;
+      for ( let i = 0; i < uf2array.length; i += uf2chunk ) {
+        // Get data size
+        var datSize = lendian32( uf2array, i + datasizeoffset );
+        var baseAddr = lendian32( uf2array, i + addroffset );
+        
+        // Contains ROM data?
+        if ( ( ROMaddr >= baseAddr && ROMaddr < baseAddr + datSize ) || // ROM start inside chunk.
+             ( ROMaddr + romLen > baseAddr && ROMaddr + romLen < baseAddr + datSize ) || // ROM end inside chunk.
+             ( ROMaddr < baseAddr && ROMaddr + romLen > baseAddr + datSize ) ) { // ROM spans over chunk.
+        
+          // This chunk contains ROM data.
+          // Go over data of chunk.
+          for ( let datInd = dataoffset; datInd < dataoffset + datSize; datInd++ ) {
+            // Calc addr.
+            var curAddr = datInd - dataoffset + baseAddr;
+            // Patching byte?
+            if ( curAddr >= ROMaddr && curAddr < ROMaddr + romLen ) {
+              var romByteAddr = curAddr - ROMaddr;
+              // Patch it.
+              uf2array[ i + datInd ] = romarray[ romByteAddr ];
+            }
+          }
+          
+        }
+        
+      }
+      
+      // Save the patched file.
+      saveByteArray( "PICODUCK_PATCHED.uf2", bytearray );
+      
+    };
+    
+    // Read romfile.
+    romreader.readAsArrayBuffer(romfile);
+  });
+  </script>
+
+</body>
+</html>
