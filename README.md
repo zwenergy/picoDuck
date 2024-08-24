@@ -5,6 +5,13 @@ The RP2040 acts as the ROM chip of the cart.
 ## Software Side
 In order to load a game onto the cartridge, you first have a "convert" a ROM to a UF2 file.
 
+### Using the Online Patcher
+You can use the [online patcher tool](https://zwenergy.github.io/picoDuckSingleROMPatch/index.html) to patch in a ROM into the ROM-less base UF2 firmware.
+You can find the latest ROM-less base UF2 firmware in the releases tab.
+Use this as the UF2 file and any Mega Duck ROM in the ROM file (max. ROM file size is 131072 bytes).
+
+### Building a FW from Scratch
+
 **Requirements:**
 1. Python
 2. CMake
