@@ -38,7 +38,7 @@
 
 #define LED_INT 25
 
-#define RSTMS 10
+#define RSTMS 100
 
 // Bit masks.
 #define ADDRMASK 0b00000000000000001111111111111111
@@ -70,21 +70,7 @@ void initGPIO() {
   gpio_set_dir( RST, GPIO_OUT );
 }
 
-void main() {
-  // Set higher freq.
-  set_sys_clock_khz(250000, true);
-  
-  // Init GPIO.
-  initGPIO();
-  
-  // Turn on LED.
-  gpio_put( LED_INT, 1 );
-  
-  // Reset.
-  gpio_put( RST, 1 );
-  sleep_ms( RSTMS );
-  gpio_put( RST, 0 );
-  
+void __not_in_flash_func( handleROM() ) {
   // Initial bank.
   uint8_t* rombank = rom;
   
@@ -118,7 +104,8 @@ void main() {
       gpiobyte |= ( ( rombyte & DATAMASKHIGH ) >> 7 ) << DATAOFFSETHIGH;
       
       // And put it out.
-      gpio_put_masked( DATAMASK, gpiobyte );
+      //gpio_put_masked( DATAMASK, gpiobyte );
+      gpio_put_all( gpiobyte );
       
     } else {
       // Data input.
@@ -126,83 +113,89 @@ void main() {
     }
     
     if ( wr ) {
+      uint32_t writeData;
       // Bank change?
-      if ( addr == 0xb000 ) {
-        // Bank switch type 1
-        BANKSWITCH = 1;
-        
-        uint32_t writeData = ( data & LOWDATAMASK ) >> DATAOFFSETLOW;
-        if ( writeData == 0 ) {
-          rombank = rom;
-        } else if ( writeData == 1 ) {
-          rombank = rom + 32768;
-        }
-      }
-        
-      else if ( addr == 0x0001 ) {
-        // Bank switch type 2
-        BANKSWITCH = 2;
-        
-        uint32_t writeData = (( data & LOWDATAMASK ) >> ( DATAOFFSETLOW )) & 0b1111;
-        
-        // Use a case structure instead of a dynamic multiplcation
-        // to hopefully speed up things.
-        uint32_t offset = 0;
-        switch ( writeData ) {
-          case 0:
-          case 1:
-            offset = 0;
-            break;
-          case 2:
-            offset = 1 * 16384;
-            break;
-          case 3:
-            offset = 2 * 16384;
-            break;
-          case 4:
-            offset = 3 * 16384;
-            break;
-          case 5:
-            offset = 5 * 16384;
-            break;
-          case 6:
-            offset = 5 * 16384;
-            break;
-          case 7:
-            offset = 6 * 16384;
-            break;
-          case 8:
-            offset = 7 * 16384;
-            break;
-          case 9:
-            offset = 8 * 16384;
-            break;
-          case 10:
-            offset = 9 * 16384;
-            break;
-          case 11:
-            offset = 10 * 16384;
-            break;
-          case 12:
-            offset = 11 * 16384;
-            break;
-          case 13:
-            offset = 12 * 16384;
-            break;
-          case 14:
-            offset = 13 * 16384;
-            break;
+      switch ( addr ) {
+        case 0x000:
+          // Bank switch type 1
+          BANKSWITCH = 1;
+          
+          writeData = ( data & LOWDATAMASK ) >> DATAOFFSETLOW;
+          if ( writeData == 0 ) {
+            rombank = rom;
+          } else if ( writeData == 1 ) {
+            rombank = rom + 32768;
+          }
+          break;
+          
+        case 0x001:
+          // Bank switch type 2
+          BANKSWITCH = 2;
+          
+          writeData = ( data & LOWDATAMASK ) & ( 0b111 << DATAOFFSETLOW );
+          
+          // Use a case structure instead of a dynamic multiplcation
+          // to hopefully speed up things.
+          switch ( writeData ) {
+            case 0:
+            case ( 1 << DATAOFFSETLOW ):
+              rombank = rom + 0; 
+              break;
+              
+            case ( 2 << DATAOFFSETLOW ):
+              rombank = rom + 1 * 16384;
+              break;
+              
+            case ( 3 << DATAOFFSETLOW ):
+              rombank = rom + 2 * 16384;
+              break;
+              
+            case ( 4 << DATAOFFSETLOW ):
+              rombank = rom + 3 * 16384;
+              break;
+              
+            case ( 5 << DATAOFFSETLOW ):
+              rombank = rom + 4 * 16384;
+              break;
+              
+            case ( 6 << DATAOFFSETLOW ):
+              rombank = rom + 5 * 16384;
+              break;
+              
+            case ( 7 << DATAOFFSETLOW ):
+              rombank = rom + 6 * 16384;
+              break;
 
-          // Something went wrong.
-          default:
-            offset = 42;
-            break;
-        }
-        
-        if ( offset != 42 ) {
-         rombank = rom + offset; 
-        }
+            // Something went wrong.
+            default:
+              break;
+          }
+          
+          break;
       }
     }
   }
+}
+
+void main() {
+  // Set higher freq.
+  set_sys_clock_khz(250000, true);
+  
+  // Init GPIO.
+  initGPIO();
+  
+  // Turn on LED.
+  gpio_put( LED_INT, 1 );
+  
+  // Reset.
+  gpio_put( RST, 1 );
+  sleep_ms( RSTMS );
+  gpio_put( RST, 0 );
+  
+  // Set RST pin back to INPUT, so we can use GPIO_PUT as non-masked.
+  gpio_set_dir( RST, GPIO_IN );
+  gpio_pull_down( RST );
+  
+  handleROM();
+
 }
