@@ -31,7 +31,7 @@ with open( dstFile, "w" ) as f:
   # First, define the address mask.
   addressBits = math.ceil( math.log2( len( outStr ) ) )
   
-  curLine = "unsigned char rom[ " + str( len( outStr ) ) + " ] = {\n"
+  curLine = "const unsigned char rom[ " + str( len( outStr ) ) + " ] = {\n"
   f.write( curLine )
   tmpCnt = 0
   firstLine = True
