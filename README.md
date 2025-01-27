@@ -2,7 +2,7 @@
 An open-source RP2040-based flash cart for the Mega Duck aka Cougar Boy.
 The RP2040 acts as the ROM chip of the cart.
 
-## Software Side
+## Software Side Single ROM FW
 In order to load a game onto the cartridge, you first have a "convert" a ROM to a UF2 file.
 
 ### Using the Online Patcher
@@ -24,6 +24,14 @@ Steps:
 2. Run `make` in the code directory.
 3. Connect the Raspberry Pi Pico to the computer while holding down the BOOTSEL button.
 4. Drag and drop the newly generated .uf2 file onto the Pico.
+
+## Software Side Multi ROM FW
+You can also find a basic multi ROM FW in this repo with 10 slots by default.
+It uses the [Mega Duck cart menu](https://github.com/bbbbbr/megaduck_cartmenu) by [bbbbbr](https://github.com/bbbbbr).
+All slots have a fixed size of 131072 bytes.
+
+A pre-compiled base FW UF2 file for the 10 slot multi ROM FW with the cart menu can be find in the releases tab. 
+Use the [online patcher tool](https://zwenergy.github.io/picoDuckMultiROMPatch/index.html) to insert ROMs and set labels in the menu.
 
 ## Hardware Side
 ### BOM
