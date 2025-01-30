@@ -116,7 +116,7 @@ void __not_in_flash_func( handleROM() ) {
       uint32_t writeData;
       // Bank change?
       switch ( addr ) {
-        case 0x000:
+        case 0xB000:
           // Bank switch type 1
           BANKSWITCH = 1;
           
@@ -128,47 +128,16 @@ void __not_in_flash_func( handleROM() ) {
           }
           break;
           
-        case 0x001:
+        case 0x0001:
           // Bank switch type 2
           BANKSWITCH = 2;
           
-          writeData = ( data & LOWDATAMASK ) & ( 0b111 << DATAOFFSETLOW );
-          
-          // Use a case structure instead of a dynamic multiplcation
-          // to hopefully speed up things.
-          switch ( writeData ) {
-            case 0:
-            case ( 1 << DATAOFFSETLOW ):
-              rombank = rom + 0; 
-              break;
-              
-            case ( 2 << DATAOFFSETLOW ):
-              rombank = rom + 1 * 16384;
-              break;
-              
-            case ( 3 << DATAOFFSETLOW ):
-              rombank = rom + 2 * 16384;
-              break;
-              
-            case ( 4 << DATAOFFSETLOW ):
-              rombank = rom + 3 * 16384;
-              break;
-              
-            case ( 5 << DATAOFFSETLOW ):
-              rombank = rom + 4 * 16384;
-              break;
-              
-            case ( 6 << DATAOFFSETLOW ):
-              rombank = rom + 5 * 16384;
-              break;
-              
-            case ( 7 << DATAOFFSETLOW ):
-              rombank = rom + 6 * 16384;
-              break;
-
-            // Something went wrong.
-            default:
-              break;
+          writeData = ( ( data & LOWDATAMASK ) >> DATAOFFSETLOW ) & 0b111;
+        
+          if ( writeData ) {
+            rombank = rom + ( writeData - 1 ) * 16384;
+          } else {
+            rombank = rom; 
           }
           
           break;
