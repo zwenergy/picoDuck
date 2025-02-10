@@ -1,5 +1,36 @@
 #include "pico/stdlib.h"
 #include <stdlib.h>
+#include "hardware/vreg.h"
+
+// Re-read the input pins when switching from output to input direction.
+// (otherwise the actual data might be wrong).
+#define DATA_RE_READ
+
+// Enable SRAM banking.
+#define SRAMBANKING
+
+// Enable some delay before "activating" cart activities.
+//#define ENABLE_BOOT_DELAY
+
+// When enabling FLASHWRITE, the SRAM content will be saved to the Flash
+// after an adjustable amount of time (REWRITEWAIT_MS).
+// This only works when reading the ROM from RAM, not from Flash
+// (the array has to be non-const).
+#define FLASHWRITE
+
+// Sizes.
+#define SRAMSIZE ( 8192 * 4 )
+
+#ifdef FLASHWRITE
+#include "pico/multicore.h"
+#include "hardware/flash.h"
+
+// Address in the Flash for the SRAM.
+#define FLASHADDR ( PICO_FLASH_SIZE_BYTES - SRAMSIZE )
+
+// Waiting time after a write to the "SRAM" before the Flash is rewritten.
+#define REWRITEWAIT_MS 5000
+#endif
 
 #include "rom.h"
 
@@ -38,23 +69,32 @@
 
 #define LED_INT 25
 
-#define RSTMS 100
+#define RSTMS 50
+#define BOOTDELAYMS 5000
 
 // Bit masks.
 #define ADDRMASK 0b00000000000000001111111111111111
 #define DATAMASK 0b00000100011111110000000000000000
 #define LOWDATAMASK 0b00000000011111110000000000000000
+#define HIDATAMASK  0b00000100000000000000000000000000
 #define NWRMASK  0b00001000000000000000000000000000
 #define RSTMASK  0b00010000000000000000000000000000
 #define A15MASK  0b00000000000000001000000000000000
 
+#define DATABIT7 0b10000000
+
+#define SRAM_RANGE_MASK          0b00000000000000000001111111111111
+#define ROM_BANKMASK_UNSHIFTED   0b00000000000011110000000000000000
+#define RAM_BANKMASK_UNSHIFTED   0b00000000111100000000000000000000
+
+
 #define DATAMASKLOW  0b01111111
 #define DATAMASKHIGH 0b10000000
 
-// Bank switch
-// 1: Dynamic 32 kB banks (e.g., Puppet Knight)
-// 2: Fixed 16 kB bank and dynamic 16 kB bank (e.g., Armour Force)
-unsigned int BANKSWITCH = 1;
+// Addresses.
+#define MD0BANK 0x1000
+
+uint8_t sram[ SRAMSIZE ];
 
 void initGPIO() {
   // Set all pins to input first.
@@ -70,91 +110,214 @@ void initGPIO() {
   gpio_set_dir( RST, GPIO_OUT );
 }
 
+#ifdef FLASHWRITE
+volatile uint32_t rewriteFlash = 0;
+
+void readSRAMfromFlash() {
+  // Offset addr after the RAM (XIP_BASE).
+  uint8_t* addr = (uint8_t*) ( XIP_BASE + FLASHADDR );
+  
+  // Go over byte-wise.
+  // TODO: This is stupid, just read out 32b chunks.
+  for ( int i = 0; i < SRAMSIZE; ++i ) {
+    sram[ i ] = *addr;
+    ++addr;
+  }
+}
+
+void __not_in_flash_func( writeSRAMToFlash( ) ) {
+  // Not interrupt-safe.
+  uint32_t ints = save_and_disable_interrupts();
+  
+  uint32_t curAddr = FLASHADDR;
+
+  // Bytes to be erased have to be a multiple of the sector size.
+  // The SRAM is 32768 bytes large.
+  // A flash sector is 4096 bytes.
+  // So it's naturally a multiple.
+  flash_range_erase( curAddr, SRAMSIZE );
+
+  // And write.
+  // Bytes to be erased have to be a multiple of the page size.
+  // The SRAM is 32768 bytes large.
+  // A flash page size is 256 bytes.
+  // So it's naturally a multiple.
+  flash_range_program( curAddr, sram, SRAMSIZE );
+  
+  // Restore interrupts.
+  restore_interrupts ( ints );
+}
+
+void __not_in_flash_func( rewriteFlashListener() ) {
+  // This function basically just
+  // waits for the Flash to be rewritten.
+  // In order to avoid a lot of re-writes, we first wait a bit to make sure,
+  // all SRAM writing is finished.
+  
+  while ( 1 ) {
+    // Check if we should rewrite.
+    if ( rewriteFlash ) {
+      
+      while ( 1 ) {
+        // Toggle the flag.
+        rewriteFlash = 0;
+        
+        //gpio_put( LED_INT, 1 );
+        
+        // Wait a bit.
+        sleep_ms( REWRITEWAIT_MS );
+        
+        // Did no new write happen?
+        if ( !rewriteFlash ) {
+          writeSRAMToFlash();
+          rewriteFlash = 0;
+          
+          //gpio_put( LED_INT, 0 );
+          break;
+        }
+      }
+    }
+    
+  }
+}
+#endif
+
 void __not_in_flash_func( handleROM() ) {
   // Initial bank.
   uint8_t* rombank = rom;
+  uint8_t* srambank = sram;
   
   // Start endless loop.
   while( 1 ) {
     uint32_t data = gpio_get_all();
     uint32_t addr = data & ADDRMASK;
-    uint32_t wr = !( data & NWRMASK );
-    uint32_t a15 = ( data & A15MASK );
     
-    if ( !a15 && !wr ) {
-      // Data output.
-      gpio_set_dir_out_masked( DATAMASK );
-      
-      // Get data byte.
-      uint8_t rombyte;
-      if ( BANKSWITCH == 1 ) {
-        rombyte = rombank[ addr ];
+    // Build an index for a jump table.
+    uint32_t n_wr = ( data & NWRMASK ) >> ( NWR - 3 );
+    uint32_t sel = ( addr >> 13 ) | n_wr;
+    
+    // Declarations before switch statement.
+    
+    switch ( sel ) {
+      case 0b0000:
+      case 0b0001:
+      case 0b0010:
+      case 0b0011:
+      {
+        // Write in ROM area (potentially banking).
+        gpio_set_dir_in_masked( DATAMASK );
         
-      } else if ( BANKSWITCH == 2 ) {
-        // Check if lower part
-        if ( addr < 16384 ) {
-          rombyte = rom[ addr ];
-        } else {
-          rombyte = rombank[ addr ];
+        // Potentially re-read the data.
+#ifdef DATA_RE_READ
+        data = gpio_get_all();
+#endif
+        
+        if ( addr == MD0BANK ) {
+          uint32_t writeData =  ( data & ROM_BANKMASK_UNSHIFTED ) >> DATAOFFSETLOW;
+          
+          rombank = rom + writeData * 32768;
+          
+#ifdef SRAMBANKING
+          writeData = ( data & RAM_BANKMASK_UNSHIFTED ) >> ( DATAOFFSETLOW + 4 );
+          srambank = sram + writeData * 8192;
+#endif
         }
-      }
-      
-      uint32_t gpiobyte = 0;
-      gpiobyte |= ( ( rombyte & DATAMASKLOW ) >> 0 ) << DATAOFFSETLOW;
-      gpiobyte |= ( ( rombyte & DATAMASKHIGH ) >> 7 ) << DATAOFFSETHIGH;
-      
-      // And put it out.
-      //gpio_put_masked( DATAMASK, gpiobyte );
-      gpio_put_all( gpiobyte );
-      
-    } else {
-      // Data input.
-      gpio_set_dir_in_masked( DATAMASK );
-    }
-    
-    if ( wr ) {
-      uint32_t writeData;
-      // Bank change?
-      switch ( addr ) {
-        case 0xB000:
-          // Bank switch type 1
-          BANKSWITCH = 1;
-          
-          writeData = ( data & LOWDATAMASK ) >> DATAOFFSETLOW;
-          if ( writeData == 0 ) {
-            rombank = rom;
-          } else if ( writeData == 1 ) {
-            rombank = rom + 32768;
-          }
-          break;
-          
-        case 0x0001:
-          // Bank switch type 2
-          BANKSWITCH = 2;
-          
-          writeData = ( ( data & LOWDATAMASK ) >> DATAOFFSETLOW ) & 0b111;
         
-          if ( writeData ) {
-            rombank = rom + ( writeData - 1 ) * 16384;
-          } else {
-            rombank = rom; 
-          }
-          
-          break;
+        break;
       }
+      
+      case 0b1000:
+      case 0b1001:
+      case 0b1010:
+      case 0b1011:
+      {
+        // Regular ROM read.
+        gpio_set_dir_out_masked( DATAMASK );
+        uint32_t rombyte = rombank[ addr ];
+        
+        uint32_t gpiobyte = 0;
+        gpiobyte |= ( ( rombyte & DATAMASKLOW ) >> 0 ) << DATAOFFSETLOW;
+        gpiobyte |= ( ( rombyte & DATAMASKHIGH ) >> 7 ) << DATAOFFSETHIGH;
+        
+        // And put it out.
+        gpio_put_all( gpiobyte );
+        
+        break;
+      }        
+        
+      case 0b0101:
+      {
+        // Write to SRAM.
+        gpio_set_dir_in_masked( DATAMASK );
+        
+        // Potentially re-read the data.
+#ifdef DATA_RE_READ
+        data = gpio_get_all();
+#endif
+        
+        uint32_t sramAddr = ( data & SRAM_RANGE_MASK );
+        uint32_t writeData = ( ( data & LOWDATAMASK ) >> DATAOFFSETLOW );
+        writeData = ( data & HIDATAMASK ? ( writeData | DATABIT7 ) : writeData );
+        
+        srambank[ sramAddr ] = writeData;
+        
+        #ifdef FLASHWRITE
+        rewriteFlash = 1;
+        #endif
+        
+        break;
+      }
+        
+      case 0b1101:
+      {
+        // Read from RAM.
+        uint32_t sramAddr = ( data & SRAM_RANGE_MASK );
+        
+        uint32_t rambyte = srambank[ sramAddr ];
+        
+        uint32_t gpiobyte = 0;
+        gpiobyte |= ( ( rambyte & DATAMASKLOW ) >> 0 ) << DATAOFFSETLOW;
+        gpiobyte |= ( ( rambyte & DATAMASKHIGH ) >> 7 ) << DATAOFFSETHIGH;
+        
+        // And put it out.
+        gpio_put_all( gpiobyte );
+        gpio_set_dir_out_masked( DATAMASK );
+        
+        break;
+      }
+        
+      case 0b0100: // Write but not ROM or RAM
+      case 0b0110: // Write but not ROM or RAM
+      case 0b0111: // Write but not ROM or RAM
+      case 0b1100: // Read but not ROM or RAM
+      case 0b1110: // Read but not ROM or RAM
+      case 0b1111: // Read but not ROM or RAM
+      default:
+        gpio_set_dir_in_masked( DATAMASK );
+        
     }
   }
 }
 
-void main() {
+int main() {
   // Set higher freq.
   set_sys_clock_khz(250000, true);
   
   // Init GPIO.
   initGPIO();
   
+#ifndef FLASHWRITE
   // Turn on LED.
   gpio_put( LED_INT, 1 );
+#endif
+  
+#ifdef FLASHWRITE
+  readSRAMfromFlash();
+#endif
+  
+  #ifdef ENABLE_BOOT_DELAY
+  sleep_ms( BOOTDELAYMS );
+  #endif
   
   // Reset.
   gpio_put( RST, 1 );
@@ -165,6 +328,12 @@ void main() {
   gpio_set_dir( RST, GPIO_IN );
   gpio_pull_down( RST );
   
+#ifdef FLASHWRITE
+  multicore_launch_core1( handleROM );
+  rewriteFlashListener();
+#else
   handleROM();
-
+#endif
+  
+  return 0;
 }

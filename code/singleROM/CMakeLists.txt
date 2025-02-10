@@ -10,10 +10,11 @@ include(pico_sdk_import.cmake)
 set(PROJECT PICODUCK)
 
 project(${PROJECT})
+set(PICO_COPY_TO_RAM 1)
 
 pico_sdk_init()
 
-add_compile_options( -Ofast )
+add_compile_options( -Ofast -Wall )
 
 add_executable(${PROJECT})
 
@@ -24,4 +25,4 @@ pico_add_extra_outputs(${PROJECT})
 
 target_sources(${PROJECT} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/main.c)
 
-target_link_libraries(${PROJECT} pico_stdlib)
+target_link_libraries(${PROJECT} pico_stdlib pico_multicore hardware_flash)
