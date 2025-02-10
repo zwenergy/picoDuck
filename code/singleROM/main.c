@@ -18,18 +18,26 @@
 // (the array has to be non-const).
 #define FLASHWRITE
 
+// Set the clock to 300 MHz and also increase the voltage.
+#define OVERCLOCKMAX
+
 // Sizes.
 #define SRAMSIZE ( 8192 * 4 )
 
 #ifdef FLASHWRITE
 #include "pico/multicore.h"
 #include "hardware/flash.h"
+#include "hardware/structs/bus_ctrl.h"
 
 // Address in the Flash for the SRAM.
 #define FLASHADDR ( PICO_FLASH_SIZE_BYTES - SRAMSIZE )
 
 // Waiting time after a write to the "SRAM" before the Flash is rewritten.
 #define REWRITEWAIT_MS 5000
+
+// Idle time between checks of the listener.
+#define REWRITECHECKINT_MS 500
+
 #endif
 
 #include "rom.h"
@@ -178,11 +186,13 @@ void __not_in_flash_func( rewriteFlashListener() ) {
       }
     }
     
+    sleep_ms( REWRITECHECKINT_MS );
   }
 }
 #endif
 
 void __not_in_flash_func( handleROM() ) {
+  
   // Initial bank.
   uint8_t* rombank = rom;
   uint8_t* srambank = sram;
@@ -257,13 +267,18 @@ void __not_in_flash_func( handleROM() ) {
         
         uint32_t sramAddr = ( data & SRAM_RANGE_MASK );
         uint32_t writeData = ( ( data & LOWDATAMASK ) >> DATAOFFSETLOW );
-        writeData = ( data & HIDATAMASK ? ( writeData | DATABIT7 ) : writeData );
         
-        srambank[ sramAddr ] = writeData;
+        if ( data & HIDATAMASK ) {
+          srambank[ sramAddr ] = writeData | DATABIT7;
+        } else {
+          srambank[ sramAddr ] = writeData;
+        }
         
-        #ifdef FLASHWRITE
+        //writeData = ( data & HIDATAMASK ? ( writeData | DATABIT7 ) : writeData );
+        
+#ifdef FLASHWRITE
         rewriteFlash = 1;
-        #endif
+#endif
         
         break;
       }
@@ -293,15 +308,27 @@ void __not_in_flash_func( handleROM() ) {
       case 0b1110: // Read but not ROM or RAM
       case 0b1111: // Read but not ROM or RAM
       default:
-        gpio_set_dir_in_masked( DATAMASK );
-        
+        gpio_set_dir_in_masked( DATAMASK );        
     }
   }
 }
 
 int main() {
+#ifdef FLASHWRITE
+  readSRAMfromFlash();
+  
+  // Set priority of this core (0) lower.
+  bus_ctrl_hw->priority |= BUSCTRL_BUS_PRIORITY_PROC1_BITS;
+#endif
+  
   // Set higher freq.
+#ifndef OVERCLOCKMAX
   set_sys_clock_khz(250000, true);
+#else
+  vreg_set_voltage(VREG_VOLTAGE_1_20);
+  sleep_ms(1000);
+  set_sys_clock_khz(300000, true);
+#endif
   
   // Init GPIO.
   initGPIO();
@@ -311,13 +338,9 @@ int main() {
   gpio_put( LED_INT, 1 );
 #endif
   
-#ifdef FLASHWRITE
-  readSRAMfromFlash();
-#endif
-  
-  #ifdef ENABLE_BOOT_DELAY
+#ifdef ENABLE_BOOT_DELAY
   sleep_ms( BOOTDELAYMS );
-  #endif
+#endif
   
   // Reset.
   gpio_put( RST, 1 );
